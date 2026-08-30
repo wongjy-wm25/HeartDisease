@@ -6,6 +6,9 @@ and lets the user enter patient information to get predictions from both
 models, following the system flowchart in Section 3.1 of the report:
     Enter patient data -> validate input -> apply saved scaler ->
     predict with both models -> display predicted class + probability
+
+This version also keeps a running history of every prediction made during
+the session, shown as a table below the form.
 """
 
 import streamlit as st
@@ -13,14 +16,13 @@ import numpy as np
 import pandas as pd
 from joblib import load
 import os
+from datetime import datetime
 
 st.set_page_config(page_title="Heart Disease Prediction", page_icon="", layout="centered")
 
 # -------------------------------------------------------------------
 # Load saved models, scaler and feature list
 # -------------------------------------------------------------------
-# Directory this app.py file lives in (works no matter what the current
-# working directory is when Streamlit Cloud runs the app).
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @st.cache_resource
@@ -42,8 +44,7 @@ def load_artifacts():
 knn_model, svm_model, scaler, feature_columns, missing_files = load_artifacts()
 
 # -------------------------------------------------------------------
-# History of past predictions (kept in session_state so it survives
-# across form submissions within the same browser session)
+# Session state: keep a list of past predictions for this session
 # -------------------------------------------------------------------
 if "history" not in st.session_state:
     st.session_state.history = []
@@ -63,6 +64,9 @@ if missing_files:
 
 st.markdown("---")
 st.subheader("Enter Patient Information")
+st.caption("Most of these numbers come from a doctor's checkup, blood test, "
+           "or ECG (heart electrical test) report. If you don't know a "
+           "value, you can leave it at the default shown.")
 
 # -------------------------------------------------------------------
 # Patient input form (with input validation)
@@ -71,49 +75,90 @@ with st.form("patient_form"):
     col1, col2 = st.columns(2)
 
     with col1:
-        age = st.number_input("Age", min_value=1, max_value=120, value=50, step=1)
+        age = st.number_input("Age (years)", min_value=1, max_value=120,
+                               value=50, step=1,
+                               help="The patient's age in years.")
         sex = st.selectbox("Sex", options=[("Male", 1), ("Female", 0)],
                             format_func=lambda x: x[0])
         cp = st.selectbox(
-            "Chest Pain Type (cp)",
-            options=[(0, "0 - Typical angina"), (1, "1 - Atypical angina"),
-                     (2, "2 - Non-anginal pain"), (3, "3 - Asymptomatic")],
-            format_func=lambda x: x[1]
+            "Chest Pain When It Happens (cp)",
+            options=[(0, "0 - Typical chest pain (classic tight/pressure feeling)"),
+                     (1, "1 - Unusual chest pain (doesn't feel like normal chest pain)"),
+                     (2, "2 - Pain not related to the heart"),
+                     (3, "3 - No chest pain symptoms")],
+            format_func=lambda x: x[1],
+            help="Describes the type of chest pain the patient feels, if any. "
+                 "This is usually noted by a doctor during a checkup."
         )
-        trestbps = st.number_input("Resting Blood Pressure (trestbps, mm Hg)",
-                                    min_value=60, max_value=250, value=120)
-        chol = st.number_input("Serum Cholesterol (chol, mg/dl)",
-                                min_value=100, max_value=600, value=200)
-        fbs = st.selectbox("Fasting Blood Sugar > 120 mg/dl (fbs)",
+        trestbps = st.number_input("Resting Blood Pressure (mmHg)",
+                                    min_value=60, max_value=250, value=120,
+                                    help="Blood pressure measured while the "
+                                         "patient is calm and sitting still, "
+                                         "not exercising. Found on a blood "
+                                         "pressure reading, e.g. '120/80'.")
+        chol = st.number_input("Cholesterol Level (mg/dl)",
+                                min_value=100, max_value=600, value=200,
+                                help="Total cholesterol level from a blood test.")
+        fbs = st.selectbox("Fasting Blood Sugar Over 120 mg/dl?",
                             options=[("No", 0), ("Yes", 1)],
-                            format_func=lambda x: x[0])
+                            format_func=lambda x: x[0],
+                            help="Was the patient's blood sugar high "
+                                 "(above 120 mg/dl) after not eating for "
+                                 "several hours? From a blood test.")
         restecg = st.selectbox(
-            "Resting ECG Results (restecg)",
-            options=[(0, "0 - Normal"), (1, "1 - ST-T abnormality"),
-                     (2, "2 - Left ventricular hypertrophy")],
-            format_func=lambda x: x[1]
+            "Resting ECG Result",
+            options=[(0, "0 - Normal"),
+                     (1, "1 - Minor abnormality in heart's electrical signal"),
+                     (2, "2 - Signs of thickened heart muscle")],
+            format_func=lambda x: x[1],
+            help="Result of a resting ECG (electrocardiogram), a machine "
+                 "test that records the heart's electrical activity. Ask "
+                 "your doctor or check the ECG report."
         )
 
     with col2:
-        thalach = st.number_input("Max Heart Rate Achieved (thalach)",
-                                   min_value=60, max_value=250, value=150)
-        exang = st.selectbox("Exercise-Induced Angina (exang)",
+        thalach = st.number_input("Highest Heart Rate Reached During Exercise (bpm)",
+                                   min_value=60, max_value=250, value=150,
+                                   help="The highest heart rate (beats per "
+                                        "minute) the patient reached during "
+                                        "an exercise/stress test.")
+        exang = st.selectbox("Chest Pain Triggered by Exercise?",
                               options=[("No", 0), ("Yes", 1)],
-                              format_func=lambda x: x[0])
-        oldpeak = st.number_input("ST Depression (oldpeak)",
-                                   min_value=0.0, max_value=10.0, value=1.0, step=0.1)
+                              format_func=lambda x: x[0],
+                              help="Did exercise cause chest pain (angina)?")
+        oldpeak = st.number_input("ST Depression Value (oldpeak)",
+                                   min_value=0.0, max_value=10.0, value=1.0,
+                                   step=0.1,
+                                   help="A number from an exercise ECG test "
+                                        "showing how much a certain part of "
+                                        "the heart signal (the 'ST segment') "
+                                        "dips during exercise. Higher usually "
+                                        "means more strain on the heart. "
+                                        "Found on the stress-test report.")
         slope = st.selectbox(
-            "Slope of Peak Exercise ST Segment (slope)",
-            options=[(0, "0 - Upsloping"), (1, "1 - Flat"), (2, "2 - Downsloping")],
-            format_func=lambda x: x[1]
+            "Shape of the Heart Signal During Peak Exercise",
+            options=[(0, "0 - Rising (upsloping)"),
+                     (1, "1 - Flat"),
+                     (2, "2 - Falling (downsloping)")],
+            format_func=lambda x: x[1],
+            help="Describes the shape of the ST segment (part of the ECG "
+                 "line) at the peak of exercise. From the exercise ECG report."
         )
-        ca = st.selectbox("Number of Major Vessels (ca)",
-                           options=[0, 1, 2, 3, 4])
+        ca = st.selectbox("Number of Major Blood Vessels Showing Blockage (0-4)",
+                           options=[0, 1, 2, 3, 4],
+                           help="Number of major blood vessels near the "
+                                "heart that show up as blocked/narrowed on "
+                                "a special X-ray (fluoroscopy) test.")
         thal = st.selectbox(
-            "Thalassemia (thal)",
-            options=[(0, "0 - Unknown"), (1, "1 - Normal"),
-                     (2, "2 - Fixed defect"), (3, "3 - Reversible defect")],
-            format_func=lambda x: x[1]
+            "Thalassemia Blood Test Result",
+            options=[(0, "0 - Not tested / unknown"),
+                     (1, "1 - Normal"),
+                     (2, "2 - Fixed defect (permanent issue)"),
+                     (3, "3 - Reversible defect (temporary issue)")],
+            format_func=lambda x: x[1],
+            help="Result of a thalassemia blood test, which checks for a "
+                 "certain type of blood disorder that can affect heart "
+                 "test readings."
         )
 
     submitted = st.form_submit_button("Predict")
@@ -198,27 +243,45 @@ if submitted:
             "and is not a substitute for professional medical diagnosis."
         )
 
-        # Save this prediction as a record in the history list
-        record = dict(input_values)
-        record["KNN Result"] = "Heart Disease" if knn_pred == 1 else "No Heart Disease"
-        record["KNN Prob(Disease)"] = f"{knn_proba[1]*100:.2f}%"
-        record["SVM Result"] = "Heart Disease" if svm_pred == 1 else "No Heart Disease"
-        record["SVM Prob(Disease)"] = f"{svm_proba[1]*100:.2f}%"
+        # ---------------------------------------------------------------
+        # Save this prediction into the session history
+        # ---------------------------------------------------------------
+        record = {
+            "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Age": age,
+            "Sex": sex[0],
+            **{col: input_values[col] for col in
+               ['trestbps', 'chol', 'thalach', 'oldpeak']},
+            "KNN Result": "Disease" if knn_pred == 1 else "No Disease",
+            "KNN Prob. of Disease (%)": round(knn_proba[1] * 100, 2),
+            "SVM Result": "Disease" if svm_pred == 1 else "No Disease",
+            "SVM Prob. of Disease (%)": round(svm_proba[1] * 100, 2),
+        }
         st.session_state.history.append(record)
 
 # -------------------------------------------------------------------
-# Display prediction history (one row per past prediction, newest first)
+# Prediction history (accumulates across every Predict click)
 # -------------------------------------------------------------------
-if st.session_state.history:
-    st.markdown("---")
-    st.subheader(f"Prediction History ({len(st.session_state.history)} record(s))")
+st.markdown("---")
+st.subheader("Prediction History")
 
-    history_df = pd.DataFrame(st.session_state.history[::-1])  # newest first
+if st.session_state.history:
+    history_df = pd.DataFrame(st.session_state.history)
     st.dataframe(history_df, use_container_width=True)
 
-    if st.button("Clear History"):
-        st.session_state.history = []
-        st.rerun()
+    col_a, col_b = st.columns(2)
+    with col_a:
+        csv_data = history_df.to_csv(index=False).encode("utf-8")
+        st.download_button("Download History as CSV", data=csv_data,
+                            file_name="prediction_history.csv",
+                            mime="text/csv")
+    with col_b:
+        if st.button("Clear History"):
+            st.session_state.history = []
+            st.rerun()
+else:
+    st.caption("No predictions yet. Fill in the form above and click "
+               "**Predict** — each result will be added to a record here.")
 
 st.markdown("---")
 st.caption("Project: Heart Disease Prediction Using Supervised Machine Learning "
